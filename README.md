@@ -734,3 +734,185 @@ Gold Dimensions   Gold Fact
                      ▼
              Daily Summary Fact
 ```
+## Pipeline Orchestration & Scheduling
+
+The pipeline is orchestrated using **Databricks Jobs & Pipelines**, with separate workflows for dimensional and fact data processing.
+
+The orchestration is structured into reusable task groups for Bronze, Silver, Gold, and daily aggregation processing.
+
+### Orchestration Architecture
+
+The overall refresh workflow is organized under the `daily_refresh_dim_fact` job.
+
+```text
+                    daily_refresh_dim_fact
+                             │
+                             ▼
+                         dim_run
+                             │
+                             ▼
+                         fact_run
+```
+
+The dimensional and fact processing workflows are executed as separate task sequences.
+
+---
+
+### 8.1 Dimensional Pipeline
+
+The dimensional pipeline processes dimension datasets sequentially through the Bronze, Silver, and Gold layers.
+
+```text
+dim_bronze
+     │
+     ▼
+dim_silver
+     │
+     ▼
+dim_gold
+```
+
+#### Dimensional Processing Flow
+
+```text
+Historical Data in S3
+        │
+        ▼
+    dim_bronze
+        │
+        ▼
+    dim_silver
+        │
+        ▼
+     dim_gold
+```
+
+The dimensional pipeline processes datasets such as:
+
+- Products
+- Brands
+- Categories
+- Customers
+- Date / Calendar
+
+The tasks are configured sequentially so that the Silver processing starts after Bronze processing and Gold processing starts after Silver processing.
+
+---
+
+### 8.2 Fact Pipeline
+
+The fact pipeline processes transactional data through Bronze, Silver, Gold, and daily aggregation stages.
+
+```text
+fact_bronze
+     │
+     ▼
+fact_silver
+     │
+     ▼
+fact_gold
+     │
+     ▼
+fact_daily
+```
+
+#### Fact Processing Flow
+
+```text
+Historical Data in S3
+        │
+        ▼
+   fact_bronze
+        │
+        ▼
+   fact_silver
+        │
+        ▼
+    fact_gold
+        │
+        ▼
+    fact_daily
+```
+
+The fact pipeline uses Databricks Auto Loader and Structured Streaming for fact ingestion and processing.
+
+The final `fact_daily` task generates the daily aggregated Gold-level dataset used for reporting.
+
+---
+
+### 8.3 End-to-End Job Dependency
+
+The complete orchestration can be represented as:
+
+```text
+                    ┌───────────────────────┐
+                    │ daily_refresh_dim_fact│
+                    └───────────┬───────────┘
+                                │
+                                ▼
+                         ┌────────────┐
+                         │  dim_run   │
+                         └─────┬──────┘
+                               │
+                               ▼
+                     ┌────────────────────┐
+                     │  Dimensional Flow │
+                     │                    │
+                     │  dim_bronze       │
+                     │       ↓            │
+                     │  dim_silver       │
+                     │       ↓            │
+                     │  dim_gold         │
+                     └─────────┬──────────┘
+                               │
+                               ▼
+                         ┌────────────┐
+                         │  fact_run  │
+                         └─────┬──────┘
+                               │
+                               ▼
+                       ┌─────────────────┐
+                       │   Fact Flow     │
+                       │                 │
+                       │  fact_bronze    │
+                       │       ↓         │
+                       │  fact_silver    │
+                       │       ↓         │
+                       │  fact_gold      │
+                       │       ↓         │
+                       │  fact_daily     │
+                       └────────┬────────┘
+                                │
+                                ▼
+                       Power BI Reporting
+```
+
+### 8.4 Pipeline Dependency Design
+
+The workflow uses task dependencies to maintain the correct processing order.
+
+**Dimension flow:**
+
+```text
+dim_bronze → dim_silver → dim_gold
+```
+
+**Fact flow:**
+
+```text
+fact_bronze → fact_silver → fact_gold → fact_daily
+```
+
+This dependency-based design ensures that downstream processing occurs only after the required upstream layer has completed successfully.
+
+### 8.5 Key Orchestration Features
+
+The Databricks orchestration layer provides:
+
+- Separate dimension and fact processing workflows
+- Sequential Bronze → Silver → Gold processing
+- Task dependencies between pipeline stages
+- Fact-level daily aggregation
+- Centralized refresh workflow
+- Integration with Delta Lake tables
+- Automated execution of the end-to-end data pipeline
