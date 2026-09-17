@@ -204,3 +204,329 @@ Bronze Delta Tables
 ```
 
 The Bronze layer therefore provides the initial Delta representation of both dimensional and fact data before further cleansing and transformation in the Silver layer.
+
+## Data Processing & Medallion Architecture
+
+The data is processed using the **Medallion Architecture**, where data moves through three progressive layers:
+
+```text
+Bronze → Silver → Gold
+```
+
+The project uses separate processing flows for **dimension data** and **fact data**.
+
+---
+
+### 6.1 Bronze Layer — Raw Ingestion
+
+The Bronze layer stores the initial ingested representation of the source data as Delta tables.
+
+#### Dimension Processing
+
+Dimension data is ingested using Spark batch processing with predefined schemas.
+
+```text
+S3 CSV Files
+     │
+     ▼
+Spark Batch Read
+     │
+     ├── Schema Enforcement
+     ├── Source File Metadata
+     └── Ingestion Timestamp
+     │
+     ▼
+Bronze Delta Tables
+```
+
+Example Bronze tables:
+
+```text
+brz_brands
+brz_category
+brz_customers
+brz_products
+brz_calendar
+```
+
+#### Fact Processing
+
+Fact data is ingested using **Databricks Auto Loader** with Structured Streaming.
+
+Auto Loader provides file-based ingestion with schema tracking, schema evolution, rescued data handling, and checkpointing.
+
+```text
+S3 Fact Files
+     │
+     ▼
+Auto Loader
+     │
+     ├── Schema Tracking
+     ├── Schema Evolution
+     ├── Rescued Data
+     ├── File Metadata
+     └── Checkpointing
+     │
+     ▼
+Bronze Delta Tables
+```
+
+Example:
+
+```text
+brz_order_items
+```
+
+---
+
+### 6.2 Silver Layer — Data Cleansing & Transformation
+
+The Silver layer contains cleansed, standardized, and validated data derived from the Bronze layer.
+
+#### Dimension Transformations
+
+Dimension data is read from Bronze Delta tables and transformed before being written to Silver.
+
+Typical transformations implemented include:
+
+- Duplicate removal
+- Data standardization
+- Column transformations
+- Data type handling
+
+For example, duplicate categories are removed based on `category_code`, and category codes are standardized using uppercase formatting.
+
+```text
+Bronze
+   │
+   ▼
+Data Cleansing
+   │
+   ├── Remove Duplicates
+   ├── Standardize Values
+   └── Transform Columns
+   │
+   ▼
+Silver
+```
+
+Example Silver tables:
+
+```text
+slv_brands
+slv_category
+slv_customers
+slv_products
+slv_calendar
+```
+
+#### Fact Transformations
+
+Fact data is processed using Structured Streaming from the Bronze Delta table.
+
+The fact transformation process includes:
+
+- Duplicate handling using business keys
+- Quantity standardization
+- Numeric conversion
+- Currency symbol removal
+- Percentage conversion
+- Coupon code standardization
+- Channel standardization
+- Processing timestamp generation
+
+For `order_items`, duplicate records are identified using:
+
+```text
+order_id + item_seq
+```
+
+The transformed data is written to the Silver layer using a Delta `MERGE` operation.
+
+```text
+Bronze Delta
+     │
+     ▼
+Structured Streaming
+     │
+     ├── Data Cleansing
+     ├── Standardization
+     ├── Deduplication
+     └── Business Transformations
+     │
+     ▼
+foreachBatch
+     │
+     ▼
+Delta MERGE
+     │
+     ▼
+Silver Delta Table
+```
+
+The Silver fact table is:
+
+```text
+slv_order_items
+```
+
+The `MERGE` logic updates existing records and inserts new records based on:
+
+```text
+order_id + item_seq
+```
+
+---
+
+### 6.3 Gold Layer — Analytics & Dimensional Modeling
+
+The Gold layer contains business-ready datasets designed for analytical consumption.
+
+The project creates both **dimension tables** and **fact tables** in the Gold layer.
+
+#### Gold Dimension Processing
+
+Dimension data from the Silver layer is integrated to create analytical dimension tables.
+
+For example, product data is enriched by joining product, brand, and category datasets.
+
+```text
+slv_products
+      │
+      ├──────────────┐
+      ▼              ▼
+slv_brands      slv_category
+      │              │
+      └──────┬───────┘
+             ▼
+      Gold Product Dimension
+             │
+             ▼
+      gld_dim_products
+```
+
+The Gold dimension layer includes:
+
+```text
+gld_dim_customers
+gld_dim_products
+gld_dim_date
+```
+
+---
+
+### 6.4 Gold Fact Processing
+
+The Gold fact pipeline transforms the Silver order-item data into an analytics-ready fact table.
+
+The processing includes the creation of business measures and analytical attributes such as:
+
+- `gross_amount`
+- `discount_amount`
+- `sale_amount`
+- `date_id`
+- `coupon_flag`
+
+The required business columns are selected and the resulting dataset is written to:
+
+```text
+gld_fact_order_items
+```
+
+The Gold fact processing also uses Delta-based batch processing and `MERGE` logic to update existing records and insert new records.
+
+```text
+slv_order_items
+       │
+       ▼
+Business Transformations
+       │
+       ├── Gross Amount
+       ├── Discount Amount
+       ├── Sale Amount
+       ├── Date Key
+       └── Coupon Flag
+       │
+       ▼
+gld_fact_order_items
+```
+
+---
+
+### 6.5 Daily Gold Aggregation
+
+A daily summary table is created from the Gold fact table for reporting and analytical use.
+
+The pipeline identifies the latest available transaction date and processes a configurable historical window.
+
+The data is aggregated by:
+
+```text
+date_id + currency
+```
+
+The summary calculates metrics including:
+
+- Total Quantity
+- Total Gross Amount
+- Total Discount Amount
+- Total Tax Amount
+- Total Amount
+
+```text
+gld_fact_order_items
+          │
+          ▼
+   Date Window Filter
+          │
+          ▼
+    Group By Date
+    + Currency
+          │
+          ▼
+    Aggregated Metrics
+          │
+          ▼
+gld_fact_daily_orders_summary
+```
+
+The summary table is maintained using Delta operations so that existing dates can be updated and new dates can be inserted.
+
+---
+
+### Medallion Processing Summary
+
+```text
+                         AWS S3
+                           │
+                           ▼
+                    Raw Landing Area
+                           │
+             ┌─────────────┴─────────────┐
+             │                           │
+       Dimension Data               Fact Data
+             │                           │
+       Spark Batch                  Auto Loader
+             │                           │
+             ▼                           ▼
+         ┌────────┐                  ┌────────┐
+         │ Bronze │                  │ Bronze │
+         └───┬────┘                  └───┬────┘
+             │                           │
+             ▼                           ▼
+         ┌────────┐                  ┌────────┐
+         │ Silver │                  │ Silver │
+         └───┬────┘                  └───┬────┘
+             │                           │
+             ▼                           ▼
+         ┌────────┐                  ┌──────────────┐
+         │  Gold  │                  │ Gold Fact    │
+         │  Dims  │                  │              │
+         └────────┘                  └──────┬───────┘
+                                            │
+                                            ▼
+                                  Daily Aggregation
+                                            │
+                                            ▼
+                              gld_fact_daily_orders_summary
+```
