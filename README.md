@@ -530,3 +530,207 @@ The summary table is maintained using Delta operations so that existing dates ca
                                             ▼
                               gld_fact_daily_orders_summary
 ```
+## Data Model
+
+The Gold layer follows a **dimensional modeling approach** to provide business-friendly and analytics-ready datasets for reporting.
+
+The model consists of **dimension tables** that provide descriptive attributes and **fact tables** that store measurable business transactions and aggregated metrics.
+
+### Gold Layer Structure
+
+```text
+Gold
+│
+├── Dimension Tables
+│   ├── gld_dim_customers
+│   ├── gld_dim_products
+│   └── gld_dim_date
+│
+└── Fact Tables
+    ├── gld_fact_order_items
+    └── gld_fact_daily_orders_summary
+```
+
+---
+
+### Dimension Tables
+
+#### `gld_dim_customers`
+
+Contains customer-related descriptive information used for customer-level analysis.
+
+The customer dimension also includes geographic attributes such as:
+
+- Country
+- State
+- Region
+
+These attributes support analysis of sales and customers across different geographic regions.
+
+---
+
+#### `gld_dim_products`
+
+Contains product-level attributes enriched with brand and category information.
+
+The table includes attributes such as:
+
+- Product ID
+- SKU
+- Product Category
+- Category Name
+- Brand Code
+- Brand Name
+- Color
+- Size
+- Material
+- Weight
+- Dimensions
+- Rating Count
+
+The product dimension is created by integrating product, brand, and category data from the Silver layer.
+
+```text
+slv_products
+      │
+      ├──────────────┐
+      ▼              ▼
+slv_brands      slv_category
+      │              │
+      └──────┬───────┘
+             ▼
+      gld_dim_products
+```
+
+---
+
+#### `gld_dim_date`
+
+Provides date-related attributes and a consistent date key for analytical reporting.
+
+The date dimension is used to connect transactional data with time-based analysis such as daily and monthly revenue trends.
+
+---
+
+### Fact Tables
+
+#### `gld_fact_order_items`
+
+The primary transactional fact table for order-item level analysis.
+
+The Gold fact processing derives analytical measures and attributes from the Silver order-item data, including:
+
+- Quantity
+- Unit Price
+- Gross Amount
+- Discount Amount
+- Tax Amount
+- Sale Amount
+- Coupon Flag
+- Date ID
+- Currency
+- Sales Channel
+
+The fact table also contains business identifiers such as:
+
+- Order ID
+- Item Sequence
+- Customer ID
+- Product ID
+- Transaction ID
+
+These keys allow the fact data to be analyzed using the corresponding dimensions.
+
+---
+
+#### `gld_fact_daily_orders_summary`
+
+This table provides an aggregated daily view of the Gold order-item fact data.
+
+The data is grouped by:
+
+```text
+date_id + currency
+```
+
+and contains aggregated measures such as:
+
+- Total Quantity
+- Total Gross Amount
+- Total Discount Amount
+- Total Tax Amount
+- Total Amount
+
+This table is designed to simplify daily-level reporting and analytical queries.
+
+---
+
+## Star Schema
+
+The Gold transactional model can be represented as a star-schema structure:
+
+```text
+                         ┌───────────────────┐
+                         │  gld_dim_customers│
+                         │                   │
+                         │ customer_id       │
+                         └─────────┬─────────┘
+                                   │
+                                   │
+                                   ▼
+┌───────────────────┐       ┌─────────────────────┐       ┌─────────────────┐
+│ gld_dim_products  │──────▶│ gld_fact_order_items│◀──────│ gld_dim_date    │
+│                   │       │                     │       │                 │
+│ product_id        │       │ order_id            │       │ date_id         │
+│ brand             │       │ item_seq            │       │ date attributes │
+│ category          │       │ customer_id         │       └─────────────────┘
+└───────────────────┘       │ product_id          │
+                            │ date_id             │
+                            │ quantity            │
+                            │ gross_amount        │
+                            │ discount_amount     │
+                            │ tax_amount          │
+                            │ sale_amount         │
+                            └──────────┬──────────┘
+                                       │
+                                       ▼
+                           ┌──────────────────────────┐
+                           │ gld_fact_daily_orders_   │
+                           │ summary                  │
+                           │                          │
+                           │ date_id + currency      │
+                           │ aggregated metrics      │
+                           └──────────────────────────┘
+```
+
+### Model Design
+
+The dimensional model separates:
+
+- **Dimensions** → descriptive business context
+- **Facts** → transactional and measurable business data
+- **Aggregations** → pre-calculated metrics for efficient reporting
+
+This structure allows Power BI to perform analysis across customers, products, dates, regions, brands, categories, channels, and financial measures.
+
+---
+
+### Gold Data Flow
+
+```text
+Silver Layer
+     │
+     ├───────────────┐
+     │               │
+     ▼               ▼
+Dimensions        Order Items
+     │               │
+     ▼               ▼
+Gold Dimensions   Gold Fact
+                     │
+                     ▼
+              Daily Aggregation
+                     │
+                     ▼
+             Daily Summary Fact
+```
